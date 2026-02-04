@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ReferralStatus {
+  PENDING
+  REAL
+}
+
+enum ContestStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum ChannelVerifyMode {
+  BOT_API
+  MANUAL
+}
+
+enum AdminActionType {
+  BAN_USER
+  UNBAN_USER
+  DELETE_REFERRAL
+  EXTEND_CONTEST
+  EDIT_RULES
+  EDIT_PRIZES
+}
+
+model User {
+  id           String     @id @default(uuid())
+  telegramId   BigInt     @unique
+  username     String?    @db.VarChar(64)
+  displayName  String?    @db.VarChar(128)
+  isBanned     Boolean    @default(false)
+  bannedAt     DateTime?
+  banReason    String?    @db.VarChar(256)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  referralsSent     Referral[] @relation("ReferralsSent")
+  referralsReceived Referral[] @relation("ReferralsReceived")
+  channelSubscriptions UserChannelSubscription[]
+  winners           Winner[]
+  adminProfile      AdminUser?
+
+  @@index([createdAt])
+  @@index([isBanned])
+}
+
+model Contest {
+  id          String        @id @default(uuid())
+  name        String        @db.VarChar(128)
+  status      ContestStatus @default(DRAFT)
+  startAt     DateTime
+  endAt       DateTime
+  rulesText   String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  referrals   Referral[]
+  prizes      ContestPrize[]
+  channels    ContestChannel[]
+  winners     Winner[]
+
+  @@index([status, startAt, endAt])
+}
+
+model Referral {
+  id          String         @id @default(uuid())
+  contestId   String
+  inviterId   String
+  inviteeId   String
+  status      ReferralStatus @default(PENDING)
+  createdAt   DateTime       @default(now())
+  verifiedAt  DateTime?
+
+  contest     Contest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  inviter     User    @relation("ReferralsSent", fields: [inviterId], references: [id], onDelete: Restrict)
+  invitee     User    @relation("ReferralsReceived", fields: [inviteeId], references: [id], onDelete: Restrict)
+
+  @@unique([contestId, inviteeId])
+  @@unique([contestId, inviterId, inviteeId])
+  @@index([contestId, status])
+  @@index([inviterId])
+}
+
+model Channel {
+  id                 String  @id @default(uuid())
+  key                String  @unique @db.VarChar(128)
+  telegramChannelId  BigInt?
+  username           String? @db.VarChar(64)
+  title              String? @db.VarChar(128)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  contests           ContestChannel[]
+  subscriptions      UserChannelSubscription[]
+}
+
+model ContestChannel {
+  id            String            @id @default(uuid())
+  contestId     String
+  channelId     String
+  isMandatory   Boolean           @default(true)
+  verifyMode    ChannelVerifyMode @default(BOT_API)
+  createdAt     DateTime          @default(now())
+
+  contest       Contest  @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  channel       Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([contestId, channelId])
+  @@index([contestId, isMandatory])
+}
+
+model UserChannelSubscription {
+  id          String   @id @default(uuid())
+  userId      String
+  channelId   String
+  isMember    Boolean  @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel     Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([channelId, isMember])
+}
+
+model ContestPrize {
+  id          String   @id @default(uuid())
+  contestId   String
+  category    String   @db.VarChar(64)
+  title       String   @db.VarChar(128)
+  description String?
+  rank        Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  contest     Contest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  winner      Winner?
+
+  @@unique([contestId, category])
+  @@unique([contestId, rank])
+  @@index([contestId, rank])
+}
+
+model Winner {
+  id             String   @id @default(uuid())
+  contestId      String
+  contestPrizeId String   @unique
+  userId         String
+  randomSeedHash String   @db.VarChar(128)
+  selectedAt     DateTime @default(now())
+
+  contest        Contest      @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  prize          ContestPrize @relation(fields: [contestPrizeId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([contestId, userId])
+  @@index([contestId, selectedAt])
+}
+
+model AdminUser {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  role       String   @db.VarChar(32)
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actions    AdminAction[]
+}
+
+model AdminAction {
+  id          String          @id @default(uuid())
+  adminUserId String
+  actionType  AdminActionType
+  targetUserId String?
+  contestId   String?
+  referralId  String?
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  targetUser  User?     @relation(fields: [targetUserId], references: [id], onDelete: SetNull)
+  contest     Contest?  @relation(fields: [contestId], references: [id], onDelete: SetNull)
+  referral    Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+
+  @@index([adminUserId, createdAt])
+  @@index([actionType])
+}
